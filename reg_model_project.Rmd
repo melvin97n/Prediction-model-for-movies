@@ -1,0 +1,258 @@
+---
+title: "Modeling and prediction for movies"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+```
+
+### Load data
+
+
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+
+* * *
+
+## Part 1: Data
+The dataset provided is data regarding a  sample of movies of size 651 produced and released before 2016. We can assume random sampling is done as is mentioned in the description of the dataset. This dataset cannot be generalized for all movies as regional movies do not seem to be included in this list. However, the dataset can possibly be generalized for Hollywood movies.
+Any conclusions made from this dataset cannot prove causality as this is only an observational study as no experiment is being conducted.
+
+* * *
+
+## Part 2: Research question
+The task at hand is to form a model to predict the popularity of a movie. And since popularity doesn't have a rigid definition, in this study we choose the normalized ratings in imdb multiplied by the normalized number of ratings as our metric. This may sound like an odd selection however, if we choose only the ratings; often time niche movies with a few audience can get rated highly, however the lack of audience shows it is only well recieved by a small group of movie goers and isnt considered to be a "popular movie". However, if we base popularity  purely on just the size of the audience, that too can be a misleading figure as bigger studios have more marketing power and can bring a large initial audience even if the movie isnt well recieved by most of the people.
+
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+As part of our EDA, firstly we would like to get rid of the columns we can safely consider not useful for our model such as the dvd_rel_day as we cannot conduct an indepth analysis for all the 32 variables.Please note that even though rotten tomatoes audiences score would possibly greatly help in assessing the IMDB rating, I would like to omit it as knowing one implies that we know the other and the purpose of prediction is defeated, however, critics rating is kept as often times critics have early access to movies.
+
+Please do take note that some amount of modelling has been done in this section as our response variable is a combined variable.
+
+The dataset we would like to currently work on is as given:
+```{r}
+movie<-movies%>%
+  select(title_type,studio,thtr_rel_year,critics_score,top200_box,imdb_rating,audience_score,imdb_num_votes)
+  
+```
+We would first like to add a column if the movie has won or been nominated for any category in the Oscars.
+```{r}
+movie$nom_or_win<-ifelse(movies$best_pic_nom=="yes"|movies$best_pic_win=="yes"|movies$best_actor_win=="yes"|movies$best_actress_win=="yes","yes","no")
+```
+
+
+Here, now we form the popularity column as was explained in the research question section:
+```{r}
+
+normalize <- function(x) {return ((x - min(x)) / (max(x) - min(x)))}
+movies$imdb_rating_norm<-normalize(movies$imdb_rating)
+movies$imdb_num_votes_norm<-normalize(movies$imdb_num_votes)
+movie$popularity<-normalize(movies$imdb_num_votes_norm*movies$imdb_rating_norm)
+
+```
+```{r}
+movies$popularity_denorm<-movies$imdb_num_votes*movies$imdb_rating
+
+```
+
+
+Removing all the columns which popularity was derived from:
+```{r}
+movie<-movie%>%
+  select(title_type,studio,thtr_rel_year,critics_score,top200_box,nom_or_win,audience_score,popularity)
+```
+
+All the columns we want to use has been formed, let us have a look at  the summary statistics for all these columns
+```{r}
+summary(movie)
+```
+
+Looking at the summary statistics, we can see that most of the variables are usable without modification with the exception of studio,here there are more than 500 categories which isnt viable for simple linear regression. We will have to modify the column to suit our needs.
+
+For our ease, we will take the top 3 studios and club the rest into the 'other' column.
+
+```{r}
+movie<-movie%>%
+mutate(studio=ifelse(!studio %in%c('Paramount Pictures','Warner Bros. Pictures','Universal Pictures'),'other',as.character(studio)))
+```
+
+Now we have the dataset as intended, there arent and N/A datapoints as all have been cleared with the adjustments we have made to our columns.
+
+Let us plot the frequency distribution of  popularity:
+
+```{r warning=FALSE}
+ggplot(data= movie, aes(x=(popularity)))+geom_histogram(bins=30)
+```
+
+Let us look at the relationships between the various explanatory  variables and the response variable.
+
+Starting with  the studios here is the summary shown below which indicates that bigger name studios tend to produce more popular movies.
+```{r warning=FALSE}
+stud<-movie%>%
+  select(studio,popularity)%>%
+  group_by(studio)%>%
+  summarize_at(vars(popularity),funs(mean(popularity)))
+arrange(stud,popularity)
+```
+Next let us look at how the title type would affect the popularity of the movie.
+```{r}
+stud<-movie%>%
+  select(title_type,popularity)%>%
+  group_by(title_type)%>%
+  summarize_at(vars(popularity),funs(mean(popularity)))
+arrange(stud,popularity)
+```
+We can see that feature films are vastly more popular than documentaries and TV movies.
+
+Relationships can be similarly seen in the rest of the categorical variables we have selected, movies that have been found in the top 200 of the box office as well as those nominated or won in the oscars also fare extremely well in the popularity scores.
+
+Now taking a look at the numerical variables.
+Starting with the critics score:
+
+```{r}
+ggplot(movie,aes(x=critics_score,y= popularity))+geom_point()
+```
+
+We can see that the value is clearly not linear and there seems to be an exponential relationship. Similarly looking at the relationship between release dates and popularity we get a very similar graph.
+
+For conducting linear regression we need to make sure that relationships between the numerical variables and response variable is linear. To do so we convert the exponential relationship to linear using log transform.We do this by applying log to our response variable as done below:
+```{r}
+movie<-movie%>%
+mutate(popularity=ifelse(popularity==0,0.0001,popularity))
+movie$popularity<-log(movie$popularity)
+
+```
+Now looking at our graphs we can see it follows a linear relationship.
+```{r warning=FALSE}
+ggplot(movie,aes(x=critics_score,y= popularity))+geom_point()+geom_smooth(method='lm')
+```
+Similarly for the relationship between popularity and release year.
+
+```{r warning=FALSE}
+ggplot(movie,aes(x=thtr_rel_year,y= popularity))+geom_point()+geom_smooth(method='lm')
+```
+
+Now that all our variables are analysed and transformed as necessary, we can get to the modelling section.
+
+* * *
+
+## Part 4: Modeling
+
+Our full model is the one we have selected in the previous section as described earlier.
+We will be doing Backwards selection by eliminating variables with the highest P-value which is out of the accepatable range of 95%. We are using this model , due to the large number of variables and how computationally difficult R^2 methods are.
+Forming the model:
+```{r}
+popu<-lm(popularity~title_type+studio+thtr_rel_year+critics_score+top200_box+nom_or_win,data=movie)
+summary(popu)
+```
+
+Surprisingly, there aren't any variables that are not significant hence we leave the model as is as our final parsimonious model. 
+
+Model Diagnostics:
+
+```{r}
+ggplot(data = popu, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+```
+Looking at the graph we can see a slight fan shape to it, this could indicate that other unnaccounted variables are playing a role in the popularity of our movies making the ones we have less reliable for more extreme values . However, we may proceed to use this data as there doesnt seem to be an extreme error.
+
+```{r}
+ggplot(data = popu, aes(x = .resid)) +
+  geom_histogram() +
+  xlab("Residuals")
+```
+The residuals plot looks fairly close to a normal distribution as expected.
+
+
+```{r}
+ggplot(data = popu, aes(sample = .resid)) +
+  stat_qq()
+```
+The normal probability is perfectly straight except for the edges which is acceptable.
+
+
+* * *
+
+## Part 5: Prediction
+For predicting the popularity of a movie we will choose La La Land, one of the most popular movies in 2016, and winner of six Oscars. Taking the data from the Imdb wesite we have formed the object 'topred' with the variables needed to be input into our model formed.
+Let us run the prediction as well as form the Confidence Interval at 95% and have  a look at the outcome.
+
+
+```{r}
+topred<-data.frame(title_type='Feature Film',studio='other',thtr_rel_year=2016,critics_score=91,top200_box='yes',nom_or_win='yes')
+x=predict(popu,topred,interval = "prediction", level = 0.95)
+x
+```
+As we can see, the prediction gives us a value of -0.7809731 as the exact value with a lower limit of -3.709394 and upper limit of 2.147, which is meaningless on its own, however, remember that we had log transformed as well as normalized our popularity column.
+Reversing this process by first finding the exponential value( inverse of log)
+
+```{r}
+exp(-0.7809731 )
+exp(-3.709394)
+exp(2.147448)
+```
+The value giving here is the normalized value for popularity, to find the denormalized value which will give us the value of our predicted Imdb_score*Imdb_num_votes we have to use the formula as shown:
+
+y=y(norm,pred)(Ymax-Ymin)+Ymin
+
+Here, our y(norm,pred)=0.4579602
+
+Ymax=
+```{r}
+max(movies$popularity_denorm)
+
+```
+
+Ymin=
+
+```{r}
+min(movies$popularity_denorm)
+```
+
+And hence our value of predicted popularity and it's CI is =
+
+```{r}
+0.4579602*(7590568-1335.9)+1335.9
+0.02449236*(7590568-1335.9)+1335.9
+8.562978*(7590568-1335.9)+1335.9
+
+```
+
+Now let us compare this with the actual values:
+
+No. of actual votes in Imdb for La la land : 468,000
+
+Actual rating of La la land on Imdb: 8.0
+
+Actual popularity: 8.0*468,000=3,700,000
+
+Predicted popularity: 3,476,902
+
+As we can see the values are very comparable and comfortably within the Confidence interal of 187214.1 to 65987763.
+
+
+* * *
+
+## Part 6: Conclusion
+We have formed an appropriate model predicting the popularity as defined by us and predicted it for the movie La la Land which turned out to be rather accurate. However, quite a few aspects of this study could be improved in this study in the collection of data as well as processing. The data has a few errors especially in the studio section where the same studio has been named differently multiple times making it harder to include this variable in our study, also, the model diagnistics show that there are other variables we havent identified in this study that influences the popularity of the given movie. We should also note that the accuracy of our prediction could be a one-off as we havent predicted for any other movie than La la Land.
